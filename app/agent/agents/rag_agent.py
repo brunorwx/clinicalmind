@@ -1,13 +1,16 @@
 # app/agent/agents/rag_agent.py
+"""RAG Agent - searches clinical documents using retrieval.
+
+Dependency Injection:
+  - LLM provider instantiated per call (no global state)
+  - Tools bound dynamically at runtime
+"""
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import SystemMessage, AIMessage
+from langgraph.prebuilt import ToolNode
 from app.agent.state import AgentState
 from app.agent.tools.rag_tools import RAG_TOOLS
 from app.config import settings
-
-_llm = ChatOpenAI(
-    model=settings.openai_model, temperature=0.1
-).bind_tools(RAG_TOOLS)
 
 RAG_SYSTEM = """You are a clinical document specialist.
 Your job: search trial documents to answer the question.
@@ -17,25 +20,31 @@ Always note which documents you found information in.
 Trial: {trial_id}
 """
 
+def _get_rag_llm():
+    """Get RAG LLM with tools bound."""
+    llm = ChatOpenAI(
+        model=settings.openai_model,
+        temperature=0.1
+    )
+    return llm.bind_tools(RAG_TOOLS)
+
 async def rag_agent_node(state: AgentState) -> dict:
-    """
-    RAG agent: runs a tool-calling loop against document search tools.
+    """RAG agent: searches clinical documents to answer questions.
+    
+    Runs a tool-calling loop against document search tools.
     Terminates when LLM stops calling tools (has enough context).
     """
-    from langchain_core.messages import AIMessage, ToolMessage
-    from langgraph.prebuilt import ToolNode
-
+    llm = _get_rag_llm()
     tool_node = ToolNode(RAG_TOOLS)
-    messages  = [
+    messages = [
         SystemMessage(RAG_SYSTEM.format(trial_id=state["trial_id"])),
         {"role": "user", "content": state["question"]},
     ]
-    all_chunks: list[dict] = []
-    tools_used: list[str]  = []
+    tools_used: list[str] = []
 
     # Internal mini-loop: up to 4 tool call rounds
     for _ in range(4):
-        response = await _llm.ainvoke(messages)
+        response = await llm.ainvoke(messages)
         messages.append(response)
 
         if not response.tool_calls:

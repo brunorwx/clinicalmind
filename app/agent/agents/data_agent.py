@@ -1,14 +1,16 @@
 # app/agent/agents/data_agent.py
+"""Data Agent - queries database and performs statistical analysis.
+
+Dependency Injection:
+  - LLM provider instantiated per call (no global state)
+  - Tools bound dynamically at runtime
+"""
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, AIMessage
 from langgraph.prebuilt import ToolNode
 from app.agent.state import AgentState
 from app.agent.tools.data_tools import DATA_TOOLS
 from app.config import settings
-
-_llm = ChatOpenAI(
-    model=settings.openai_model, temperature=0
-).bind_tools(DATA_TOOLS)
 
 DATA_SYSTEM = """You are a clinical data analyst.
 Your job: query the trial database and run statistical analysis to answer the question.
@@ -23,16 +25,30 @@ Return precise numbers with context (denominator, timeframe).
 Trial: {trial_id}
 """
 
+def _get_data_llm():
+    """Get data agent LLM with tools bound."""
+    llm = ChatOpenAI(
+        model=settings.openai_model,
+        temperature=0
+    )
+    return llm.bind_tools(DATA_TOOLS)
+
 async def data_agent_node(state: AgentState) -> dict:
+    """Data agent: queries database and analyzes trial statistics.
+    
+    Runs a tool-calling loop against SQL and analysis tools.
+    Terminates when LLM has enough information to answer.
+    """
+    llm = _get_data_llm()
     tool_node = ToolNode(DATA_TOOLS)
-    messages  = [
+    messages = [
         SystemMessage(DATA_SYSTEM.format(trial_id=state["trial_id"])),
         {"role": "user", "content": state["question"]},
     ]
     tools_used: list[str] = []
 
     for _ in range(5):
-        response = await _llm.ainvoke(messages)
+        response = await llm.ainvoke(messages)
         messages.append(response)
 
         if not response.tool_calls:

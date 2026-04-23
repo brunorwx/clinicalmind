@@ -1,4 +1,15 @@
 # app/agent/graph.py
+"""
+LangGraph orchestration - cleaner after DDD refactoring.
+
+The state is now more minimal and organized:
+- QueryContext: messages, trial_id, user_id, question (core)
+- Agent contexts: kept separate (rag, data, safety specific state)
+- Output tracking: sources, final_answer, error
+
+Business logic moved to domain layer and use cases.
+Agents remain simple executors (nodes in the graph).
+"""
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from app.agent.state import AgentState
@@ -10,6 +21,15 @@ from app.agent.agents.safety_agent import safety_agent_node
 from app.agent.edges import route_after_supervisor, route_after_safety
 
 def build_graph(checkpointer=None):
+    """Build the agent orchestration graph.
+    
+    Architecture:
+    1. input → supervisor router
+    2. supervisor → agents (RAG, Data, Safety) in parallel
+    3. Safety check determines: safe → synthesizer OR blocked → blocked node
+    4. RAG/Data → synthesizer (converge)
+    5. synthesizer → audit → END
+    """
     g = StateGraph(AgentState)
 
     # ── Register all nodes ─────────────────────────────────────────
@@ -31,11 +51,9 @@ def build_graph(checkpointer=None):
     g.add_edge("input", "supervisor")
 
     # 3. Supervisor fans out to agents in parallel
-    #    send=True enables parallel execution
     g.add_conditional_edges(
         "supervisor",
         route_after_supervisor,
-        # Map each possible return value to the node it names
         {
             "safety_agent": "safety_agent",
             "rag_agent":    "rag_agent",
@@ -45,7 +63,6 @@ def build_graph(checkpointer=None):
 
     # 4. Safety check: if blocked, skip to blocked node
     #    Otherwise fall through to synthesizer
-    #    (other agents converge naturally — they all edge to synthesizer)
     g.add_conditional_edges(
         "safety_agent",
         route_after_safety,
@@ -73,6 +90,9 @@ async def get_graph():
     """
     Factory used by the FastAPI router.
     Reuses a module-level graph instance in production.
+    
+    NOTE: Business logic has moved to domain layer (DDD).
+    This graph is now purely orchestration/coordination.
     """
     import psycopg
     from app.config import settings

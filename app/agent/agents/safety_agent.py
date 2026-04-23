@@ -1,4 +1,10 @@
 # app/agent/agents/safety_agent.py
+"""Safety Agent - classifies safety risks and flags queries for review.
+
+Dependency Injection:
+  - LLM provider instantiated per call (no global state)
+  - Tools bound dynamically at runtime
+"""
 import json
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, AIMessage
@@ -6,10 +12,6 @@ from langgraph.prebuilt import ToolNode
 from app.agent.state import AgentState
 from app.agent.tools.safety_tools import SAFETY_TOOLS
 from app.config import settings
-
-_llm = ChatOpenAI(
-    model=settings.openai_model, temperature=0
-).bind_tools(SAFETY_TOOLS)
 
 SAFETY_SYSTEM = """You are a clinical safety officer AI.
 Your job: classify the safety risk of a query and flag if needed.
@@ -22,21 +24,36 @@ Trial: {trial_id}
 User: {user_id}
 """
 
+def _get_safety_llm():
+    """Get safety agent LLM with tools bound."""
+    llm = ChatOpenAI(
+        model=settings.openai_model,
+        temperature=0
+    )
+    return llm.bind_tools(SAFETY_TOOLS)
+
 async def safety_agent_node(state: AgentState) -> dict:
+    """Safety agent: classifies safety risk and flags if needed.
+    
+    Runs a tool-calling loop to classify risk and optionally flag for review.
+    Terminates when classification is complete.
+    """
+    llm = _get_safety_llm()
     tool_node = ToolNode(SAFETY_TOOLS)
-    messages  = [
+    messages = [
         SystemMessage(SAFETY_SYSTEM.format(
-            trial_id=state["trial_id"], user_id=state["user_id"]
+            trial_id=state["trial_id"],
+            user_id=state["user_id"]
         )),
         {"role": "user", "content": state["question"]},
     ]
-    tools_used: list[str]           = []
-    classification: str | None      = None
-    safety_reason: str | None       = None
-    flag_id: str | None             = None
+    tools_used: list[str] = []
+    classification: str | None = None
+    safety_reason: str | None = None
+    flag_id: str | None = None
 
     for _ in range(3):
-        response = await _llm.ainvoke(messages)
+        response = await llm.ainvoke(messages)
         messages.append(response)
 
         if not response.tool_calls:

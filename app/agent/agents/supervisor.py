@@ -8,8 +8,11 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage
 from app.agent.state import AgentState
 from app.config import settings
+from app.container import Container
 
-_llm = ChatOpenAI(model=settings.openai_model, temperature=0)
+# Get injected LLM provider instead of creating global
+def _get_llm():
+    return ChatOpenAI(model=settings.openai_model, temperature=0)
 
 ROUTING_PROMPT = """You are the supervisor of a clinical research AI system.
 
@@ -31,7 +34,8 @@ Respond with ONLY a JSON array of agent names, e.g. ["safety", "rag", "data"]
 
 async def supervisor_router_node(state: AgentState) -> dict:
     """Decides which agents to invoke for this question."""
-    resp = await _llm.ainvoke([
+    llm = _get_llm()
+    resp = await llm.ainvoke([
         SystemMessage(ROUTING_PROMPT),
         {"role": "user", "content": state["question"]},
     ])
@@ -64,6 +68,7 @@ Instructions:
 
 async def supervisor_synthesizer_node(state: AgentState) -> dict:
     """Synthesizes all agent outputs into the final answer."""
+    llm = _get_llm()
     outputs_text = "\n\n".join(
         f"=== {name.upper()} AGENT ===\n{result}"
         for name, result in state.get("agent_outputs", {}).items()
@@ -73,7 +78,7 @@ async def supervisor_synthesizer_node(state: AgentState) -> dict:
         question=state["question"],
         agent_outputs=outputs_text or "No agent outputs available.",
     )
-    resp = await _llm.ainvoke(prompt)
+    resp = await llm.ainvoke(prompt)
 
     # Collect sources from retrieved chunks
     sources = [
